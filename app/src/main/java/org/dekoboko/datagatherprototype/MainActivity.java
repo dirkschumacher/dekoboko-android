@@ -10,41 +10,55 @@ import android.content.pm.PackageManager;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
-import android.net.Uri;
 import android.support.v4.app.ActivityCompat;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.util.Log;
 
-import com.google.android.gms.appindexing.Action;
-import com.google.android.gms.appindexing.AppIndex;
-import com.google.android.gms.common.api.GoogleApiClient;
+import com.squareup.moshi.JsonAdapter;
+import com.squareup.moshi.Moshi;
+import com.squareup.moshi.Types;
+
+import org.dekoboko.datagatherprototype.model.DataPoint;
+import org.dekoboko.datagatherprototype.model.DataPoints;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.reflect.ParameterizedType;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
 import okio.BufferedSource;
 import okio.Okio;
+
 
 public class MainActivity extends AppCompatActivity {
     private static final String TAG = "MainActivity";
     private static final int PERMISSION_CODE_READ_LOCATION = 42;
     private static final int REQUEST_ENABLE_BT = 43;
     private static final UUID MY_UUID = UUID.fromString("00001101-0000-1000-8000-00805f9b34fb");
+    private Location currentLocation;
 
     BluetoothAdapter mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
+    private JsonAdapter<DataPoints> dataPointsJsonAdapter;
+    private OkHttpClient okHttpClient;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         Log.d(TAG, "start");
-        //createLocationListener();
+        Moshi build = new Moshi.Builder().build();
+        dataPointsJsonAdapter = build.adapter(DataPoints.class);
+        okHttpClient = new OkHttpClient.Builder().build();
+        createLocationListener();
         connectToBluetooth();
     }
 
@@ -106,6 +120,23 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    class SendThread extends Thread {
+        private DataPoints dataPoints;
+
+        public SendThread(DataPoints dataPoints) {
+            this.dataPoints = dataPoints;
+        }
+
+        public void run() {
+            String jsonDataPoints = dataPointsJsonAdapter.toJson(dataPoints);
+            RequestBody body = RequestBody.create(MediaType.parse("application/json"), jsonDataPoints);
+            Request request = new Request.Builder()
+                    .url("http://someurl.herokuapp.com/api/new").post(body).build();
+            //okHttpClient.newCall(request);
+            Log.d(TAG, jsonDataPoints);
+        }
+    }
+
     private class ConnectedThread extends Thread {
         private final BluetoothSocket mmSocket;
         private final InputStream mmInStream;
@@ -130,22 +161,27 @@ public class MainActivity extends AppCompatActivity {
 
         public void run() {
             BufferedSource buffer1 = Okio.buffer(Okio.source(mmInStream));
-            Log.d(TAG, "buffer1");
-            // Keep listening to the InputStream until an exception occurs
             String currentValue = "";
-            List<String> currentValues = new ArrayList<>();
+            DataPoints currentValues = new DataPoints();
             while (true) {
                 try {
                     // Read from the InputStream
                     byte b = buffer1.readByte();
                     if (b == 10) {
-                        currentValues.add(currentValue);
-                        Log.d(TAG, "byte: " + currentValue);
+                        String[] split = currentValue.split("\t");
+                        if (currentLocation != null) {
+                            DataPoint dataPoint = new DataPoint(currentLocation,
+                                    Integer.parseInt(split[0]), Integer.parseInt(split[1]));
+                            currentValues.dataPoints.add(dataPoint);
+                            if (currentValues.dataPoints.size() >= 10) {
+                                new SendThread(currentValues).run();
+                                currentValues = new DataPoints();
+                            }
+                        }
                         currentValue = "";
                     } else if (b != 13) {
                         currentValue += (char)b;
                     }
-                    Log.d(TAG, "" + b);
 
                     // Send the obtained bytes to the UI activity
                     //mHandler.obtainMessage(MESSAGE_READ, bytes, -1, buffer)
@@ -209,12 +245,13 @@ public class MainActivity extends AppCompatActivity {
         // Define a listener that responds to location updates
         LocationListener locationListener = new LocationListener() {
             public void onLocationChanged(Location location) {
-                Log.d(TAG, "accuracy = " + location.getAccuracy());
-                Log.d(TAG, "latitude = " + location.getLatitude());
-                Log.d(TAG, "longitude = " + location.getLongitude());
-                Log.d(TAG, "speed = " + location.getSpeed());
-                Log.d(TAG, "time = " + location.getTime());
-                Log.d(TAG, "provider = " + location.getProvider());
+                currentLocation = location;
+                //Log.d(TAG, "accuracy = " + location.getAccuracy());
+                //Log.d(TAG, "latitude = " + location.getLatitude());
+                //Log.d(TAG, "longitude = " + location.getLongitude());
+                //Log.d(TAG, "speed = " + location.getSpeed());
+                //Log.d(TAG, "time = " + location.getTime());
+                //Log.d(TAG, "provider = " + location.getProvider());
             }
 
             public void onStatusChanged(String provider, int status, Bundle extras) {
